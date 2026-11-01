@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  lambda-serverless-app - A serverless REST API (API Gateway + Lambda + DynamoDB).
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment stage name
+  ModelId:
+    Type: String
+    Default: global.anthropic.claude-haiku-5-5
+    Description: Bedrock model or inference profile ID used by the agent
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 10
+    Tracing: Active
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref ItemsTable
+        STAGE: !Ref Stage
+        LOG_LEVEL: INFO
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization'"
+      AllowOrigin: "'*'"
+
+Resources:
+  ItemsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "items-api-${Stage}"
+      CodeUri: src/
+      Handler: items.app.lambda_handler
+      Description: CRUD handler for the /items API
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ItemsTable
+      Events:
+        Health:
+          Type: Api
+          Properties:
+            Path: /health
+            Method: get
+        ListItems:
+          Type: Api
+          Properties:
+            Path: /items
+            Method: get
+        CreateItem:
+          Type: Api
+          Properties:
+            Path: /items
+            Method: post
+        GetItem:
+          Type: Api
+          Properties:
+            Path: /items/{id}
+            Method: get
+        UpdateItem:
+          Type: Api
+          Properties:
+            Path: /items/{id}
+            Method: put
+        DeleteItem:
+          Type: Api
+          Properties:
+            Path: /items/{id}
+            Method: delete
+
+  AgentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "items-agent-${Stage}"
+      CodeUri: src/
+      Handler: agent.app.lambda_handler
+      Description: AI agent that manages items using Claude on Amazon Bedrock
+      MemorySize: 512
+      Timeout: 29   # API Gateway REST APIs time out at 29 seconds by default
+      Environment:
+        Variables:
+          MODEL_ID: !Ref ModelId
+          MAX_STEPS: "6"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ItemsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource:
+                - !Sub "arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/${ModelId}"
+                - "arn:aws:bedrock:*::foundation-model/anthropic.*"
+      Events:
+        Agent:
+          Type: Api
+          Properties:
+            Path: /agent
+            Method: post
+
+  AgentFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AgentFunction}"
+      RetentionInDays: 14
+
+  ItemsFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ItemsFunction}"
+      RetentionInDays: 14
+
+  ItemsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "items-${Stage}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+Outputs:
+  ApiUrl:
+    Description: Base URL of the API
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+  AgentUrl:
+    Description: "POST a JSON body with a prompt field here to talk to the agent"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/agent"
+  ItemsFunctionArn:
+    Value: !GetAtt ItemsFunction.Arn
+  ItemsTableName:
+    Value: !Ref ItemsTable
