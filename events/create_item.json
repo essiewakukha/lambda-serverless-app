@@ -1,0 +1,8 @@
+{
+  "httpMethod": "POST",
+  "resource": "/items",
+  "path": "/items",
+  "headers": { "Content-Type": "application/json" },
+  "body": "{\"name\": \"Sample item\", \"price\": 25}",
+  "pathParameters": null
+}
